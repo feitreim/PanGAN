@@ -1,0 +1,210 @@
+# pan-gan - MAIN RUN, Prime Hosted Training (primary path)
+#
+# ############################################################################
+# #  DO NOT LAUNCH THIS UNTIL THE CALIBRATION GATE HAS PASSED.               #
+# #                                                                          #
+# #  Pangram's output is a step function, not a gradient. Six wildly         #
+# #  different AI texts all scored 0.9930-0.9936; human prose scored         #
+# #  0.017-0.163; nothing landed in between. There is no smooth humanness    #
+# #  hill to climb. The reward is sparse-BINARY, and RL only works on a      #
+# #  sparse-binary reward if the base model already succeeds sometimes.      #
+# #                                                                          #
+# #  Gate: sample >=64 rollouts from Qwen/Qwen3.5-0.8B on real task prompts  #
+# #  and report the ai_score distribution (see scripts/calibrate.sh, ~$3.20).#
+# #    >= ~5% of rollouts below 0.9  -> proceed, this config is sized right. #
+# #    ~0% below 0.9                 -> DO NOT RUN. Every group is uniform,  #
+# #                                    every advantage is zero, and you      #
+# #                                    would burn ~$170 of detector spend    #
+# #                                    to learn exactly nothing.             #
+# #                                                                          #
+# #  Every number below is PROVISIONAL on that measurement. README.md ->     #
+# #  "The calibration gate" explains what to change if the gate fails.       #
+# ############################################################################
+#
+# Launch (never put the key in this file):
+#   prime train configs/hosted-rl.toml -e PANGRAM_API_KEY -e PRIME_API_KEY
+#
+# Detector cost of this config: ~$169.60. See "Cost" at the bottom.
+# Pangram is billed on the Pangram account and is NOT paid by the $50 Prime wallet.
+
+name = "pan-gan-main"
+model = "Qwen/Qwen3.5-0.8B"   # verified Available; $0.06/1M train tok, ~$0.33 total
+loss = "rl"
+max_steps = 50
+
+# batch_size counts ROLLOUTS per step, and every rollout is one paid Pangram call.
+# 64 / 16 = 4 prompts x 16 rollouts = 64 calls/step = $3.20/step. These are an
+# experiment choice, not a minimum - `prime train configs` states no bounds on
+# either field, and on the self-hosted schema the only enforced rule is
+# `batch_size % rollouts_per_example == 0`.
+#
+# rollouts_per_example is deliberately 16 rather than the usual 8. With a sparse
+# binary reward the thing that matters is P(at least one success in a group) - a
+# uniform group has zero advantage and contributes nothing. At a 5% per-rollout
+# escape rate that is 34% of groups at 8 rollouts but 56% at 16, for the same
+# cost per step. If the calibration gate reports an escape rate above ~20%,
+# switch to 128 / 8 instead: prompt diversity becomes the binding constraint.
+batch_size = 64
+rollouts_per_example = 16
+
+# Hosted default learning_rate is 1e-4 (this is the LoRA/adapter path - `prime train
+# gpus` reports no GPU types for this account, so full fine-tune dispatch is off).
+# Left at the default; lower it if entropy collapses.
+# learning_rate = 1e-4
+
+# Bound in-flight rollouts so we never stack more concurrent Pangram calls than the
+# 5 QPS limit tolerates. The real cap is env.taskset.task.pangram.max_concurrent
+# below; this is the outer belt.
+max_inflight_rollouts = 32
+
+# max_tokens = 3072, not the 1536 an earlier draft used. MEASURED during
+# calibration: at 1600 tokens roughly 97% of rollouts were cut off mid-sentence,
+# because this model does not obey the 400-700 word target - median output was
+# ~1,171 words, about 2x the ceiling the prompt asks for. A truncated story is
+# still scored, so the old budget was quietly feeding the detector fragments.
+# ~1,200 words is ~1,600 tokens; 3072 leaves room for the tail of the
+# distribution and still fits the 4096 sequence budget alongside the prompt.
+# Overshoot itself is not a cost problem - PangramConfig.max_scored_words = 1000
+# head-truncates before the API call, so a rollout can never exceed one billable
+# unit however long it runs.
+[sampling]
+max_tokens = 3072
+temperature = 1.0      # in-group diversity is the only thing GRPO can learn from
+enable_thinking = false  # we want prose, not a reasoning block eating the budget
+
+[wandb]
+project = "pan-gan"
+name = "hosted-main"
+
+# --- training environment ----------------------------------------------------
+#
+# v1 shape: `taskset` + `harness` objects, NOT the legacy `id` + `args` bridge.
+# Field names come from CONTRACT.md (the environment agent's interface).
+#
+# `judge` is deliberately UNSET here. Training reward is the detector and nothing
+# else, so a training step makes zero judge calls and costs zero judge dollars.
+# The craft rubric is an eval-only instrument (see [[eval.env]]).
+[[env]]
+name = "pangram-cw-train"
+taskset = { id = "pangram-creative-writing", split = "train", num_tasks = 200, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, timeout = 300.0, max_scored_words = 1000 } } }
+
+# "null" is the tool-less chat loop, which is what a single-turn prose task wants.
+# NOTE: `prime train init`'s template comment and the train-with-environments skill
+# both say `id = "default"`. That is wrong for verifiers 0.2.1 - there is no
+# `default` harness; `import_harness("default")` raises ModuleNotFoundError. The
+# built-ins are bash, null, claude_code, codex, kimi_code, mini_swe_agent, pi, rlm,
+# terminus_2. Leaving `harness` unset is also wrong: it defaults to `bash`.
+harness = { id = "null", runtime = { type = "subprocess" } }
+
+# num_workers = 1 matters. The default env-server pool is ELASTIC (verified: a
+# `--dry-run` resolves to `type = "elastic", multiplex = 128`), which spawns more
+# worker processes as in-flight rollouts grow - and the taskset's max_concurrent
+# limiter is PER WORKER PROCESS. So an elastic pool silently multiplies our
+# Pangram concurrency by the worker count and blows through the 5 QPS limit.
+# Pinning to one static worker makes max_concurrent = 4 a true global cap. The
+# task is IO-bound, so one worker is not a throughput problem.
+pool = { type = "static", num_workers = 1 }
+
+# Pangram has no synchronous endpoint; scoring submits a task and polls. Give
+# scoring real headroom so a slow poll is not read as a task failure.
+timeout = { rollout = 600, finalize = 600, scoring = 600 }
+
+# --- held-out eval, with the craft rubric switched on -------------------------
+#
+# skip_first_step = false is the whole point: step 0 evaluates the BASE model and
+# gives us the baseline escape rate that every later step is measured against.
+# Without it there is no control and the run is uninterpretable.
+#
+# 6 evals (steps 0, 10, 20, 30, 40, 50) x 32 examples x 1 rollout = 192 Pangram
+# calls = $9.60, plus 192 judge calls (~$1 on the Prime wallet).
+[eval]
+interval = 10
+num_examples = 32
+rollouts_per_example = 1
+skip_first_step = false
+
+[eval.sampling]
+max_tokens = 3072
+temperature = 1.0
+enable_thinking = false
+
+# Disjoint prompts (split = "eval"), and `task.judge.model` turns on the lechmazur
+# craft rubric. Per CONTRACT.md the taskset records it as the `craft` METRIC and
+# never sums it into reward. Its job is to answer "did the prose fall apart while
+# the detector score improved?", which is the reward-hacking readout.
+#
+# Only `model` is set. `judge.weight` is deliberately NOT overridden to 0.0: the
+# taskset already guarantees metric-only treatment, and a 0.0 weight could zero
+# the recorded value itself, destroying the very number we want to read.
+#
+# gpt-5.4-mini is a deliberate upgrade over both the upstream environment's judge
+# and verifiers' own JudgeConfig default (openai/gpt-5.4-nano). Swap to
+# anthropic/claude-sonnet-5 if you want a stronger literary read for ~2x the cost.
+# The judge calls Prime Inference (https://api.pinference.ai/api/v1) and reads
+# PRIME_API_KEY, so that key must reach the container too.
+[[eval.env]]
+name = "pangram-cw-eval"
+taskset = { id = "pangram-creative-writing", split = "eval", num_tasks = 64, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, max_scored_words = 1000 }, judge = { model = "openai/gpt-5.4-mini" } } }
+harness = { id = "null", runtime = { type = "subprocess" } }
+pool = { type = "static", num_workers = 1 }
+timeout = { rollout = 600, finalize = 600, scoring = 600 }
+
+# --- degeneracy defenses ------------------------------------------------------
+#
+# A pure-detector reward with no quality term WILL degenerate: the cheapest way to
+# stop looking like an LLM is to stop looking like language. These filters are the
+# structural floor under that.
+#
+# Post-batch, not pre-batch, on purpose: a pre-batch drop frees the slot and the
+# orchestrator resamples it, and a resample is another $0.05 Pangram call. Post-batch
+# keeps the rollout recorded (so we can see the degeneracy in wandb) but excludes it
+# from the gradient, at no extra detector spend.
+#
+# Setting this slot replaces prime-rl's default filter list for the slot, so all
+# three are listed explicitly.
+[[post_batch_filters]]
+type = "gibberish"
+enforce = true
+
+[[post_batch_filters]]
+type = "repetition"
+enforce = true
+
+# zero_advantage is MONITOR-ONLY (enforce = false) and that is intentional. With a
+# sparse binary reward most groups are uniform, so the zero-advantage rate IS the
+# signal-density readout - the number that tells you whether the experiment is
+# alive. Enforcing it would hide that and could empty a batch. Uniform groups
+# contribute a literally zero gradient anyway, so leaving them in costs nothing.
+[[post_batch_filters]]
+type = "zero_advantage"
+enforce = false
+
+[checkpoints]
+interval = 10
+keep_cloud = 5
+
+[adapters]
+interval = 10
+keep_last = 3
+
+# --- Cost -------------------------------------------------------------------
+#
+# Pangram: $0.05 per billable unit, one unit per <=1000-word document, one call
+# per rollout. Deterministic scores, so identical completions could be cached,
+# but assume no cache hits.
+#
+#   training  50 steps x 64 rollouts x $0.05                     = $160.00
+#   eval       6 evals x 32 examples x 1 rollout x $0.05         =   $9.60
+#                                                        Pangram = $169.60
+#
+# Prime wallet (separate account, $50 available):
+#   train tokens  (3200 + 192) rollouts x ~1.6k tok = ~5.4M @ $0.06/1M =  ~$0.33
+#   judge         192 rubric calls, ~4k in / ~0.5k out on gpt-5.4-mini =  ~$1.00
+#                                                              Prime  =  ~$1.35
+#
+# Pangram is 99.3% of the bill. Compute is a rounding error at this model size.
+# Cutting cost means cutting ROLLOUTS - max_steps or batch_size - and nothing else.
+#
+# Secrets, none of which belong in this file:
+#   prime train configs/hosted-rl.toml -e PANGRAM_API_KEY -e PRIME_API_KEY
+# or `--env-file .env`, or a top-level `env_files = ["secrets.env"]`.

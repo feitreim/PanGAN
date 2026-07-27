@@ -1,0 +1,48 @@
+# pan-gan - periodic-eval OVERLAY for the self-hosted prime-rl path.
+#
+# Compose it after a base config; prime-rl deep-merges `@` files left to right:
+#   uv run --no-sync rl @ ../pan-gan/configs/rl.toml @ ../pan-gan/configs/eval.toml
+#
+# (The Hosted Training path does not need an overlay - its eval lives inline in
+# configs/hosted-rl.toml, because that schema has no `@` composition.)
+#
+# What this adds: a held-out prompt split (`split = "eval"`, disjoint from train and
+# seeded), plus the lechmazur craft rubric switched on by setting a judge model.
+#
+# The craft score is an INSTRUMENT, not a target. Per CONTRACT.md the taskset
+# records it as the `craft` metric and never sums it into reward. Its only job is
+# to answer the question a pure-detector reward cannot: "did the prose collapse
+# while the detector score improved?" If `escaped` climbs and `craft` falls, the
+# policy found a reward hack rather than a writing style.
+#
+# skip_first_step stays false. The step-0 eval is the base model's baseline escape
+# rate, and it is the number every later step is measured against. Without it the
+# run has no control.
+#
+# Judge model: openai/gpt-5.4-mini on Prime Inference
+# (https://api.pinference.ai/api/v1, PRIME_API_KEY). Verified listed by
+# `prime inference models` at $0.75/1M in, $4.50/1M out. That is a deliberate
+# upgrade over both the upstream environment's judge and verifiers' own
+# JudgeConfig default (openai/gpt-5.4-nano). The judge runs in the env-server
+# process, so PRIME_API_KEY has to be exported in the launching shell.
+#
+# Cost per eval: num_examples Pangram calls + num_examples judge calls.
+# 32 examples every 10 steps over a 50-step run = 6 evals x 32 = 192 calls = $9.60
+# of Pangram, plus ~$1 of judge on the Prime wallet.
+
+[orchestrator.eval]
+interval = 10
+num_examples = 32
+group_size = 1
+skip_first_step = false
+
+[orchestrator.eval.sampling]
+temperature = 1.0
+max_completion_tokens = 3072
+
+[[orchestrator.eval.env]]
+name = "pangram-cw-eval"
+env.taskset = { id = "pangram-creative-writing", split = "eval", num_tasks = 64, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, max_scored_words = 1000 }, judge = { model = "openai/gpt-5.4-mini" } } }
+env.agent.harness = { id = "null", runtime = { type = "subprocess" } }
+env.agent.timeout = { rollout = 600, finalize = 600, scoring = 600 }
+pool = { type = "static", num_workers = 1 }

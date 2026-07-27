@@ -1,0 +1,70 @@
+# pan-gan - SMOKE TEST for the self-hosted prime-rl path. ~$1.60 of Pangram spend.
+#
+# Two steps of the full stack. Purpose is plumbing, not science: does the env
+# package import inside prime-rl's venv, does PANGRAM_API_KEY reach the env server,
+# does a rollout get scored, does a weight update land, does the inference server
+# take the new weights.
+#
+#   uv run --no-sync rl @ ../pan-gan/configs/rl-debug.toml --clean-output-dir
+#
+# Add --dry-run to validate the config and write the resolved per-process TOMLs
+# without launching anything. That works on any machine, GPU or not, and is the
+# first thing to run after editing any config here.
+#
+# Still needs 2 GPUs - prime-rl has no single-GPU RL layout. 2x 24GB is enough
+# at 0.8B.
+#
+# Cost: 2 steps x 16 rollouts x $0.05 = $1.60.
+#
+# The only size constraint the schema enforces is `batch_size % group_size == 0`
+# (verified: 9/8 rejected, 8/8 and 16/8 accepted; both fields are `ge=1` and
+# prime-rl's own debug configs ship batch_size = 2). There is NO documented floor
+# of 64/8 - an earlier draft of this file claimed one and priced the smoke at
+# $6.40 on that basis. 16 / 8 is two real groups, which is the cheapest shape that
+# still exercises multi-group batching; 8 / 8 is one group for $0.80 if you only
+# need to prove the pipe.
+
+max_steps = 2
+seq_len = 4096
+
+[deployment]
+num_train_gpus = 1
+num_infer_gpus = 1
+
+[model]
+name = "Qwen/Qwen3.5-0.8B"
+
+[wandb]
+project = "pan-gan"
+name = "selfhosted-smoke"
+
+[orchestrator]
+batch_size = 16
+group_size = 8
+
+[orchestrator.train.sampling]
+temperature = 1.0
+max_completion_tokens = 3072
+
+# Same env shape as configs/rl.toml - `env.` nesting, harness under the `agent`
+# role, `pool` on the entry. See that file for why, and for the command that
+# revalidates it.
+[[orchestrator.train.env]]
+name = "pangram-cw"
+env.taskset = { id = "pangram-creative-writing", split = "train", num_tasks = 32, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, timeout = 300.0, max_scored_words = 1000 } } }
+env.agent.harness = { id = "null", runtime = { type = "subprocess" } }
+env.agent.timeout = { rollout = 600, finalize = 600, scoring = 600 }
+pool = { type = "static", num_workers = 1 }
+
+[orchestrator.renderer]
+name = "qwen3.5"
+enable_thinking = false
+
+[trainer.optim]
+lr = 1e-6
+
+[inference]
+gpu_memory_utilization = 0.5
+
+[inference.model]
+max_model_len = 4096

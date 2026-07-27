@@ -1,0 +1,9 @@
+[project]
+name = "pan-gan"
+version = "0.1.0"
+description = "RL-train a small LLM to write prose the Pangram AI-writing detector scores as human"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "verifiers>=0.2.1",
+]

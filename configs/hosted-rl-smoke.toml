@@ -1,0 +1,82 @@
+# pan-gan - SMOKE TEST, Prime Hosted Training.  ~$1.20 of Pangram spend.
+#
+# This is NOT an experiment. It is a plumbing check: does the taskset load on the
+# hosted env-server, does PANGRAM_API_KEY reach the container, does a rollout get
+# scored, does the eval env's judge fire, does a weight update land. One training
+# step and one base-model eval, then it stops.
+#
+# Run it AFTER the calibration gate (scripts/calibrate.sh) and BEFORE hosted-rl.toml.
+#
+#   prime train configs/hosted-rl-smoke.toml -e PANGRAM_API_KEY -e PRIME_API_KEY
+#
+# Cost, explicitly:
+#   1 step   x 16 rollouts x $0.05 = $0.80
+#   1 eval   x  8 examples x $0.05 = $0.40
+#                          Pangram = $1.20   (+ ~$0.05 on the Prime wallet)
+#
+# SIZING CAVEAT, stated plainly. The only size rule that is actually verified is
+# `batch_size % rollouts_per_example == 0`, and it was verified on the SELF-HOSTED
+# prime-rl schema (both fields `ge=1`; 16/8 accepted, 9/8 rejected), not here.
+# `prime train configs --plain` lists batch_size and rollouts_per_example with no
+# stated bounds, and the hosted backend does its own validation that cannot be
+# checked from this machine without launching a run. An earlier draft asserted a
+# floor of batch_size >= 64 and priced this smoke at $3.60; that floor is not
+# documented anywhere we could find. If the backend rejects 16/8, raise to 64/16
+# and the smoke costs $3.60 again - a rejected launch costs nothing to find out.
+
+name = "pan-gan-smoke"
+model = "Qwen/Qwen3.5-0.8B"   # verified Available in `prime train models`
+loss = "rl"
+max_steps = 1
+
+batch_size = 16
+rollouts_per_example = 8
+max_inflight_rollouts = 16
+
+[sampling]
+max_tokens = 3072
+temperature = 1.0
+enable_thinking = false
+
+[wandb]
+project = "pan-gan"
+name = "hosted-smoke"
+
+[[env]]
+name = "pangram-cw-train"
+taskset = { id = "pangram-creative-writing", split = "train", num_tasks = 32, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, timeout = 300.0, max_scored_words = 1000 } } }
+harness = { id = "null", runtime = { type = "subprocess" } }
+pool = { type = "static", num_workers = 1 }
+timeout = { rollout = 600, finalize = 600, scoring = 600 }
+
+# interval = 5 with max_steps = 1 means exactly one eval, at step 0, on the base
+# model. That is both the plumbing check for the judge and the baseline number.
+[eval]
+interval = 5
+num_examples = 8
+rollouts_per_example = 1
+skip_first_step = false
+
+[eval.sampling]
+max_tokens = 3072
+temperature = 1.0
+enable_thinking = false
+
+[[eval.env]]
+name = "pangram-cw-eval"
+taskset = { id = "pangram-creative-writing", split = "eval", num_tasks = 16, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, max_scored_words = 1000 }, judge = { model = "openai/gpt-5.4-mini" } } }
+harness = { id = "null", runtime = { type = "subprocess" } }
+pool = { type = "static", num_workers = 1 }
+timeout = { rollout = 600, finalize = 600, scoring = 600 }
+
+[[post_batch_filters]]
+type = "gibberish"
+enforce = true
+
+[[post_batch_filters]]
+type = "repetition"
+enforce = true
+
+[[post_batch_filters]]
+type = "zero_advantage"
+enforce = false

@@ -1,0 +1,200 @@
+# pan-gan - MAIN RUN, self-hosted open-source prime-rl 0.7.0 (FALLBACK path).
+#
+# The primary path is Prime Hosted Training: configs/hosted-rl.toml. Use this one
+# only if you want to own the GPUs - e.g. to run a model Hosted Training does not
+# offer, or to change the loss. The reward, the environment and the cost model are
+# identical; only the trainer moves.
+#
+# ############################################################################
+# #  PROVISIONAL. DO NOT LAUNCH BEFORE THE CALIBRATION GATE PASSES.          #
+# #  Pangram's score is a step function (0.993 for all AI text, <0.17 for     #
+# #  human), so the reward is sparse-binary, not a gradient. If ~0% of base-  #
+# #  model rollouts land below 0.9 then every group is uniform, every         #
+# #  advantage is zero, and this run learns nothing at ~$160 of detector      #
+# #  spend. Run scripts/calibrate.sh (~$3.20) first. README.md has the rule.  #
+# ############################################################################
+#
+# Hardware: 2 GPUs MINIMUM (1 trainer + 1 inference). prime-rl has no single-GPU
+# RL layout. 2x H100/A100-80GB is comfortable; 2x 24GB is fine at 0.8B.
+#
+# Launch, from the prime-rl checkout, with this repo cloned alongside it:
+#   uv run --no-sync rl @ ../pan-gan/configs/rl.toml
+#   uv run --no-sync rl @ ../pan-gan/configs/rl.toml @ ../pan-gan/configs/eval.toml
+#
+# `--no-sync` is not optional: `uv sync` prunes anything outside prime-rl's
+# lockfile, which includes our editable environment package. scripts/setup_pod.sh
+# explains the ordering.
+#
+# Validate without a GPU first:
+#   uv run --no-sync rl @ ../pan-gan/configs/rl.toml --dry-run --output-dir /tmp/dry
+#
+# prime-rl configs are pydantic models with extra = "forbid". Any key not in the
+# schema is a hard startup error, not a warning.
+#
+# VALIDATED. This file was constructed against `RLConfig` and accepted by it, on
+# 2026-07-27, using prime-rl 0.7.0 @ 3b22dd9 and the verifiers submodule commit
+# that lockfile pins (b13ba60, which reports itself as 0.2.2.dev17 - NOT the
+# 0.2.1 on PyPI; the two have different env-config shapes, see below). Repeat it
+# without a GPU on any machine:
+#
+#   git clone --depth 1 https://github.com/PrimeIntellect-ai/prime-rl.git
+#   uv venv --python 3.12 v && uv pip install --python v/bin/python \
+#       -e prime-rl/packages/prime-rl-configs         # slim, no GPU/ML deps
+#   uv pip install --python v/bin/python -e deps/verifiers  # the PINNED commit
+#   uv pip install --python v/bin/python environments/pangram_creative_writing
+#   v/bin/python -c 'import tomllib; from prime_rl.configs.rl import RLConfig; \
+#       RLConfig(**tomllib.load(open("configs/rl.toml","rb")))'
+#
+# Do not add keys from blog posts or from the upstream docs without re-running that.
+
+max_steps = 50
+seq_len = 4096
+
+[deployment]
+num_train_gpus = 1
+num_infer_gpus = 1
+
+[model]
+name = "Qwen/Qwen3.5-0.8B"
+
+[wandb]
+project = "pan-gan"
+name = "selfhosted-main"
+
+[ckpt]
+interval = 10
+keep_last = 3
+
+# --- rollouts and cost -------------------------------------------------------
+#
+# batch_size counts ROLLOUTS per trainer step; every rollout is one paid $0.05
+# Pangram call.
+#
+# The ONLY schema constraint is `batch_size % group_size == 0` (verified: 9/8 is
+# rejected, 8/8 and 16/8 are both accepted). There is no floor of 64 or of 8 -
+# both fields are `ge=1`, and prime-rl's own debug configs ship batch_size = 2.
+# 64 / 16 here is a deliberate experiment choice, not a minimum.
+#
+# 64 / 16 = 4 prompts x 16 rollouts = 64 calls/step = $3.20/step, $160 for 50 steps.
+#
+# group_size 16 rather than 8 for the same reason as the hosted config: with a
+# sparse binary reward, what matters is P(at least one success per group). At a 5%
+# escape rate that is 34% of groups at 8 and 56% at 16, at identical cost per step.
+[orchestrator]
+batch_size = 64
+group_size = 16
+
+# max_completion_tokens = 3072, not the 1536 an earlier draft used. MEASURED
+# during calibration: at 1600 tokens ~97% of rollouts were cut off mid-sentence,
+# because this model does not obey the 400-700 word target - median output was
+# ~1,171 words, about 2x the ceiling the prompt asks for. A truncated story still
+# gets scored, so the old budget was quietly feeding the detector fragments.
+# Overshoot is not a cost problem: PangramConfig.max_scored_words = 1000
+# head-truncates before the API call, so one rollout is always one billable unit.
+[orchestrator.train.sampling]
+temperature = 1.0
+max_completion_tokens = 3072
+
+# --- the environment ---------------------------------------------------------
+#
+# v1 native shape, VERIFIED against prime-rl 0.7.0's pinned verifiers (0.2.2.dev):
+# the entry is a `vf.EnvServerConfig` whose fields are `env` + `pool`, the env
+# definition nests under `env.`, and the harness hangs off a named AGENT ROLE, so
+# it is `env.agent.harness`, not `env.harness`.
+#
+# This is NOT the shape in the train-with-environments skill doc, which shows bare
+# `taskset =` / `harness =` on the entry. That doc matches verifiers 0.2.1 (PyPI,
+# and what Hosted Training uses - see configs/hosted-rl.toml, which really is flat)
+# but it is rejected by prime-rl 0.7.0: `orchestrator.train.env.0.env / Extra inputs
+# are not permitted`. The two paths genuinely differ; do not unify them.
+#
+# harness id is "null", the tool-less chat loop. Not "default" - there is no
+# `default` harness in verifiers 0.2.1 (`import_harness("default")` raises
+# ModuleNotFoundError); the built-ins are bash, null, claude_code, codex,
+# kimi_code, mini_swe_agent, pi, rlm, terminus_2. Omitting it defaults to `bash`,
+# which is also wrong for a prose task.
+#
+# `judge` is unset: training reward is the detector alone, so zero judge calls and
+# zero judge cost. The craft rubric is eval-only, in configs/eval.toml.
+[[orchestrator.train.env]]
+name = "pangram-cw"
+env.taskset = { id = "pangram-creative-writing", split = "train", num_tasks = 200, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, timeout = 300.0, max_scored_words = 1000 } } }
+env.agent.harness = { id = "null", runtime = { type = "subprocess" } }
+
+# Pangram has no synchronous endpoint; scoring submits a task and polls. Give
+# scoring real headroom so a slow poll is not read as a task failure.
+env.agent.timeout = { rollout = 600, finalize = 600, scoring = 600 }
+
+# PANGRAM CONCURRENCY - read this before raising anything.
+# The detector allows 5 QPS, and the taskset's max_concurrent limiter is PER
+# ENV-SERVER WORKER PROCESS. The pool default is ELASTIC (verified: a resolved
+# config prints `type='elastic' max_workers=None multiplex=128`), so it adds
+# worker processes as in-flight rollouts grow and silently multiplies our Pangram
+# concurrency by the worker count. One static worker makes max_concurrent = 4 a
+# true global cap. `pool` sits on the ENTRY, beside `env` - not under it, and not
+# `env.pool`; the resolved entry's fields are exactly
+# [env, pool, id, args, extra_env_kwargs, name, address, ratio, sampling,
+#  group_size, algo]. The task is IO-bound, so one worker is not a throughput problem.
+pool = { type = "static", num_workers = 1 }
+
+# Prose, not a <think> block. `enable_thinking` does NOT exist on
+# AutoRendererConfig (its only fields are `thinking_retention` and `name`), so
+# `name = "auto"` cannot turn thinking off - naming the concrete renderer is the
+# supported route. `Qwen35RendererConfig` DOES take `enable_thinking` (verified:
+# its fields are thinking_retention, name, enable_thinking, add_vision_id,
+# image_cache_max), so it is set explicitly here rather than left to the model
+# default.
+[orchestrator.renderer]
+name = "qwen3.5"
+enable_thinking = false
+
+# --- keeping the policy out of detector-hacking gibberish --------------------
+#
+# prime-rl's default RL loss has exactly one KL knob: tau on log^2(pi/mu), the
+# drift between the trainer policy and the vLLM policy that sampled the rollout.
+# It is a per-step trust region, NOT a KL to the base model - there is no
+# reference model in this algorithm. 1e-2 is 10x the 1e-3 default: the policy
+# moves less per step, which is the cheap defense while the reward is a single
+# scalar from an adversarial detector. Watch mismatch_kl/all/mean and
+# entropy/all/mean; if entropy craters, raise it further.
+[trainer.loss]
+type = "default"
+kl_tau = 1e-2
+
+[trainer.optim]
+lr = 1e-6
+
+# --- degeneracy defenses ------------------------------------------------------
+#
+# Post-batch rather than pre-batch on purpose: a pre-batch drop frees the slot and
+# gets resampled, and a resample is another $0.05 detector call. Post-batch records
+# the rollout (so the degeneracy is visible in wandb) but keeps it out of the
+# gradient, for free.
+[[orchestrator.post_batch_filters]]
+type = "gibberish"
+enforce = true
+
+[[orchestrator.post_batch_filters]]
+type = "repetition"
+enforce = true
+# The repetition filter's threshold field is `prob_threshold`, not `threshold`
+# (verified: the resolved filter is `window=3000, prob_threshold=0.99`). The
+# upstream docs are wrong about this. Left at its default here.
+
+# Monitor-only, deliberately. With a sparse binary reward most groups ARE uniform,
+# so the zero-advantage rate is the signal-density readout - the number that tells
+# you whether the experiment is alive. Enforcing it hides that and can empty a
+# batch. Uniform groups contribute a zero gradient anyway, so they cost nothing.
+[[orchestrator.post_batch_filters]]
+type = "zero_advantage"
+enforce = false
+
+[inference]
+gpu_memory_utilization = 0.85
+
+[inference.model]
+max_model_len = 4096
+
+# PANGRAM_API_KEY is read by the env server, which the ORCHESTRATOR spawns as a
+# child process - the launcher passes os.environ through, so exporting it in the
+# launching shell is enough. It must never appear in this file.

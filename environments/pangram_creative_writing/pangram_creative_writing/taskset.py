@@ -15,7 +15,20 @@ Two rules the scoring depends on, both measured:
 
 from __future__ import annotations
 
+import verifiers
 import verifiers.v1 as vf
+
+if not hasattr(vf, "TaskData"):
+    # Prime's Hosted Training image raised `no attribute 'TaskData'` here while the same
+    # package imports fine locally and passes the Hub's own install-and-import CI. Its
+    # vendored verifiers also satisfies `>=0.2.1` without exposing the attribute, which no
+    # published release does (0.2.1 and every 0.2.2.dev have it). A bare AttributeError says
+    # nothing about which build is actually loaded, so report the build itself.
+    raise RuntimeError(
+        f"verifiers {getattr(verifiers, '__version__', '?')} at {verifiers.__file__} has no "
+        f"verifiers.v1.TaskData. Public exports: "
+        f"{sorted(n for n in dir(vf) if not n.startswith('_'))}"
+    )
 
 from pangram_creative_writing.judge import CraftJudge
 from pangram_creative_writing.pangram import (

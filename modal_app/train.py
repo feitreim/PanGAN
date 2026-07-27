@@ -169,8 +169,21 @@ def fetch(config: str = "rl-debug", limit: int = 5) -> list[dict]:
     import json
     from pathlib import Path
 
+    # A reader container sees another container's writes only after reload().
+    outputs.reload()
+
+    # Search from the run root, not from rollouts/: prime-rl nests its actual run under
+    # <output_dir>/run_default/, so traces live at
+    # <output_dir>/run_default/rollouts/step_N/train/{all,effective}/traces.jsonl.
+    # The bare <output_dir>/rollouts/step_N/rank_0.bin is the trainer transport, not records.
+    root = Path(f"/outputs/{config}")
+    found = sorted(root.rglob("*traces.jsonl"))
+    print(f"trace files under {root}: {len(found)}")
+    for f in found:
+        print(f"  {f}  ({sum(1 for _ in f.open())} rollouts)")
+
     rows = []
-    for p in sorted(Path(f"/outputs/{config}/rollouts").rglob("train/all/traces.jsonl")):
+    for p in sorted(root.rglob("train/all/traces.jsonl")):
         for line in p.open():
             t = json.loads(line)
             info, metrics = t.get("info", {}), t.get("metrics", {})
@@ -186,4 +199,15 @@ def fetch(config: str = "rl-debug", limit: int = 5) -> list[dict]:
                 }
             )
     rows.sort(key=lambda r: (r["ai_score"] is None, r["ai_score"] or 0))
+    scored = [r for r in rows if r["ai_score"] is not None]
+    print(f"\nrollouts: {len(rows)}  scored: {len(scored)}  gated: {len(rows) - len(scored)}")
+    if scored:
+        print(f"ai_score  min {min(r['ai_score'] for r in scored):.4f}  "
+              f"max {max(r['ai_score'] for r in scored):.4f}")
+        print(f"escaped (<0.9): {sum(r['ai_score'] < 0.9 for r in scored)}/{len(scored)}")
+    print("\n--- lowest ai_score first (the escapes) ---")
+    for r in rows[:limit]:
+        print(f"\n[{r['step']}] ai={r['ai_score']} reward={r['reward']} "
+              f"coh={r['coherence']} gate={r['gate']} words={r['words']}")
+        print(f"  {r['story'][:220]!r}")
     return rows[:limit]

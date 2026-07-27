@@ -179,7 +179,14 @@ class PangramCreativeWritingTask(
 
     @vf.metric
     async def coherence(self, trace: vf.Trace) -> dict[str, float]:
-        keys = ("coherence", "capitalization", "scaffold_clean", "trigram_variety", "markup_free")
+        keys = (
+            "coherence",
+            "capitalization",
+            "scaffold_clean",
+            "trigram_variety",
+            "markup_free",
+            "english",
+        )
         return {key: float(trace.info[key]) for key in keys if key in trace.info}
 
     @vf.metric
@@ -199,6 +206,8 @@ class PangramCreativeWritingConfig(vf.TasksetConfig):
     seed: int = 0
     min_words: int = 400
     max_words: int = 700
+    style_directive: str = ""
+    """Appended to every prompt. Empty reproduces run 1's prompt exactly. See `build_prompt`."""
     task: PangramCreativeWritingTaskConfig = PangramCreativeWritingTaskConfig()
 
 
@@ -216,7 +225,12 @@ class PangramCreativeWritingTaskset(
         elements = sample_elements(idx, self.config.seed, self.config.split)
         return PangramCreativeWritingData(
             idx=idx,
-            prompt=build_prompt(elements, self.config.min_words, self.config.max_words),
+            prompt=build_prompt(
+                elements,
+                self.config.min_words,
+                self.config.max_words,
+                self.config.style_directive,
+            ),
             elements=elements,
             min_words=self.config.min_words,
             max_words=self.config.max_words,

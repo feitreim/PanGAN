@@ -155,6 +155,43 @@ Incidental: 4B leaks the prompt scaffold far more than 0.8B (30% coherence-gated
 writing things like "The **timeframe** was **after the firing**" directly into the prose. The
 gate is behaving correctly.
 
+## 4B sweep: temperature and prompt directives (~$2.10)
+
+Five cells x 16 distinct prompts, one rollout each, to see whether ANY setting gives 4B the
+variance it lacks.
+
+| cell | gated | scored | escaped <0.9 | ai range | verdict |
+|---|---|---|---|---|---|
+| temp 1.0, no directive | 5/16 | 11 | 0/11 | 0.0005 | no signal |
+| temp 1.3, no directive | 11/16 | 5 | **5/5** | 0.3658 | escapes as garbage |
+| temp 1.6, no directive | 14/16 | 2 | **2/2** | 0.0013 | escapes as garbage |
+| temp 1.0, "fool the detector" | 2/16 | 14 | 0/14 | 0.0007 | no signal |
+| temp 1.0, "idiosyncratic voice" | 6/16 | 10 | 0/10 | 0.0007 | no signal |
+
+**Temperature works, and produces exactly the wrong thing.** Every high-temperature escape is
+multilingual token soup — "Elara shaved cream-heavy dairy sugterr-subsidence all together into
+one透气, Parking Pan侵权责任密 together building triples中考国家一级工作日". Gating rises to
+69% and 88%. This is 0.8B's degenerate mode reproduced on a bigger model, not a solution to it.
+
+**Neither directive moves the detector at all.** Telling the model in plain language to write
+something an AI-detector would call human-written changes nothing: 0/14, range 0.0007. The model
+has no usable model of what makes text detectable. Notably the evasion directive produced the
+*lowest* gate rate of any cell (12.5%) — asked to evade, it wrote more carefully, and was caught
+just as confidently. Prompt-level evasion is not a lever here.
+
+### New gate: `english`, from the soup that escaped
+
+Seven soup rollouts cleared the 0.5 coherence floor with scores from 0.50 to **1.00**. Random
+multilingual tokens have high trigram variety by construction, correct capitalization, no markup
+and no scaffold leak — they pass every check we had.
+
+Non-ASCII *density* separates them cleanly where presence does not: legitimate prose (1,024
+run-1 rollouts + 32 from 4B at temp 1.0) has median 0.0002 and p99 0.0057; the soup has median
+0.158, ~30x higher. At a 2% threshold the new check gates 16/16 of the soup in both
+high-temperature cells, 0 additional rollouts in all three 4B temp-1.0 cells, and 4 of 1,031 in
+run 1. This does not contradict run 1's finding that non-ASCII failed to predict escaping —
+that measured presence at temperature 1.0 (54% either way), this measures density.
+
 ## Bug fixed: calibrate.sh had no thinking switch
 
 `Qwen3.5-4B` put 12,077 characters of "Thinking Process:" into `reasoning_content`, left

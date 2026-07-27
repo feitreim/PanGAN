@@ -54,6 +54,37 @@ MARKUP = re.compile(
 )
 
 
+MIN_ENGLISH_CHARS = 200
+MAX_NONASCII = 0.02
+"""Above this fraction of non-ASCII characters the text is not English prose.
+
+Measured, with an enormous margin. Legitimate prose (1,024 run-1 rollouts plus 32 from 4B at
+temperature 1.0) sits at a median non-ASCII fraction of 0.0002 and a p99 of 0.0057 — curly
+quotes and em dashes. Multilingual token soup from 4B at temperature 1.3-1.6 sits at a median
+of 0.158, ~30x higher. A 2% threshold gates 100% of the soup and 0.6% of legitimate prose.
+
+Distinct from every other check here, all of which the soup passes. Random tokens have high
+trigram variety by construction, correct capitalization after sentence splits, no markup and no
+scaffold leak: seven soup rollouts escaped the detector with `coherence` scores of 0.50 to 1.00.
+Non-ASCII density is the only cheap signal that separates them.
+
+Note this does NOT contradict run 1, where non-ASCII failed to predict escaping (54% of both
+escapes and non-escapes contained some). That measured *presence* at temperature 1.0; this
+measures *density*, and the two populations do not overlap."""
+
+
+def english(story: str) -> float:
+    """0 if the text is mostly not ASCII. Binary — the separation is 30x, so there is no
+    ambiguous band to model.
+
+    Returns 1.0 below `MIN_ENGLISH_CHARS`, where the ratio is dominated by sample size rather
+    than by language, exactly as `trigram_variety` does: a single em dash in a short sentence is
+    8% non-ASCII. Real stories clear 400 words (~2,000 characters) or gate on word count first."""
+    if len(story) < MIN_ENGLISH_CHARS:
+        return 1.0
+    return float(sum(ord(c) > 127 for c in story) / len(story) <= MAX_NONASCII)
+
+
 def capitalization(story: str) -> float:
     """Fraction of sentences opening with a capital. All-lowercase output scores ~0."""
     sentences = [s.strip() for s in SENTENCE.split(story) if s.strip()]
@@ -99,5 +130,6 @@ def coherence(story: str) -> dict[str, float]:
         "scaffold_clean": scaffold_clean(story),
         "trigram_variety": trigram_variety(story),
         "markup_free": markup_free(story),
+        "english": english(story),
     }
     return {**parts, "coherence": min(parts.values())}

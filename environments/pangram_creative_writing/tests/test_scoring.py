@@ -109,6 +109,25 @@ class TestCoherence:
     def test_looping_text_collapses_trigram_variety(self):
         assert coherence("the wind blew cold " * 40)["trigram_variety"] < 0.2
 
+    def test_token_soup_is_gated_even_when_every_other_check_passes(self):
+        """A real 4B temperature-1.3 escape (ai_score 0.048). It has high trigram variety by
+        construction, no markup, no scaffold leak and correct capitalization — seven such
+        rollouts cleared the 0.5 floor with coherence up to 1.00 before `english` existed."""
+        soup = (
+            "The fog in Grafton hadn't organized into carrying sea. Elara shaved cream-heavy "
+            "dairy sugterr-subsidence all together into one透气, Parking "
+            "Pan侵权责任密 together building triples中考"
+            "国家一级工作日 shorter than_shop vêm juge."
+        )
+        assert coherence(soup)["english"] == 0.0
+        assert coherence(soup)["coherence"] == 0.0
+
+    def test_ordinary_punctuation_is_not_foreign(self):
+        """Curly quotes and em dashes are why this is a density threshold, not a presence one —
+        54% of run-1 rollouts contained some non-ASCII."""
+        story = "“Don’t,” she said — and the door closed behind her forever."
+        assert coherence(story)["english"] == 1.0
+
     def test_short_text_is_left_to_the_word_count_gate(self):
         """Below MIN_TRIGRAM_WORDS the ratio is dominated by sample size, not repetition."""
         assert coherence("A short opening line.")["trigram_variety"] == 1.0

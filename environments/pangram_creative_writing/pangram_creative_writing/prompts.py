@@ -74,11 +74,22 @@ def sample_elements(idx: int, seed: int, split: Split) -> dict[str, str]:
     return {name: rng.choice(_split_pool(name, seed, split)) for name in ELEMENTS}
 
 
-def build_prompt(elements: dict[str, str], min_words: int, max_words: int) -> str:
+def build_prompt(
+    elements: dict[str, str], min_words: int, max_words: int, directive: str = ""
+) -> str:
+    """`directive` is appended verbatim after the upstream template.
+
+    Its reason to exist: Qwen3.5-4B failed the calibration gate with 0/45 rollouts below 0.9 and
+    a total score range of 0.001, because competent instruct-tuned prose is exactly what the
+    detector is trained on. With no variance there is nothing for RL to shape, so the task has
+    to change before a larger model is worth running. Appending rather than editing the template
+    keeps the default byte-identical to run 1's prompt, so an empty directive is a true control.
+    """
     required = "\n".join(f"* {name}: {value}" for name, value in elements.items())
-    return create_template().format(
+    prompt = create_template().format(
         min_count=min_words, max_count=max_words, required_elements=required
     )
+    return f"{prompt}\n\n{directive.strip()}" if directive.strip() else prompt
 
 
 def extract_story(reply: str) -> str:

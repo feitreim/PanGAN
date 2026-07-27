@@ -47,7 +47,8 @@
 #
 # Do not add keys from blog posts or from the upstream docs without re-running that.
 
-max_steps = 50
+# 20 steps, sized against a $60 Pangram balance. See the arithmetic below.
+max_steps = 20
 seq_len = 4096
 
 [deployment]
@@ -81,8 +82,20 @@ keep_last = 3
 # sparse binary reward, what matters is P(at least one success per group). At a 5%
 # escape rate that is 34% of groups at 8 and 56% at 16, at identical cost per step.
 [orchestrator]
-batch_size = 64
-group_size = 16
+# Budget, measured rather than nominal:
+#   (steps + 1) x batch x 0.78 x $0.05
+# The +1 is real: prime-rl pipelines, generating step N+1's rollouts while training on N, then
+# discards them at shutdown ("cancelled 16 in-flight train rollout(s)"). The smoke run paid for
+# 54 attempted rollouts on a nominal 32. The 0.78 is the measured share that survives the
+# word-count and coherence gates; the rest are rejected before any API call.
+#   21 x 48 x 0.78 x $0.05 = $39 train + $4 eval = ~$43, against a $60 balance.
+# batch 64 would be $56 -- affordable but with no room to recover from a failed run.
+batch_size = 48
+# group_size 8, not 16: calibration measured 6 of 8 groups carrying within-group spread > 0.01
+# at this size, and 48/8 gives 6 prompts per step instead of 3. More distinct prompts beats
+# fatter groups when the escape rate is ~8% and the gradient comes from group-relative
+# differences.
+group_size = 8
 
 # max_completion_tokens = 3072, not the 1536 an earlier draft used. MEASURED
 # during calibration: at 1600 tokens ~97% of rollouts were cut off mid-sentence,

@@ -6,9 +6,12 @@ the `TaskData`/`Task` split this environment is built on, and that image is not 
 See docs/PRIME_SUPPORT_REQUEST.md. Modal gives us the one thing that was missing: control of the
 container, so we pin prime-rl and let it bring the verifiers it was built against.
 
-    modal run modal_app/train.py                 # 3-step smoke, ~$1.60 of Pangram
-    modal run modal_app/train.py --config rl     # the real run
-    modal run modal_app/train.py --gpu H100:2 --config rl
+    modal run modal_app/train.py                    # smoke: 2 steps, ~$2 of Pangram
+    modal run modal_app/train.py --config rl,eval   # the real run: 20 steps, ~$43
+    modal run modal_app/train.py --check-only       # prove the image, spend nothing
+    modal run modal_app/train.py::fetch --limit 10  # read scored rollouts back
+
+Several configs may be composed comma-separated; prime-rl deep-merges `@` files left to right.
 
 The directory is `modal_app/`, not `modal/`, so it cannot shadow the `modal` package on import.
 """
@@ -107,10 +110,14 @@ def train(config: str = "rl-debug", extra_args: list[str] | None = None) -> str:
     run(f"{UV} pip install -e {REPO_DIR}/environments/pangram_creative_writing")
     run(f"{UV} run --no-sync python -c 'import pangram_creative_writing; print(\"env import OK\")'")
 
+    # `config` may name several TOMLs, comma-separated: prime-rl deep-merges `@` files left to
+    # right, which is how the eval overlay composes onto a base run ("rl,eval").
+    names = [c.strip() for c in config.split(",") if c.strip()]
+    files = " ".join(f"@ {REPO_DIR}/configs/{n}.toml" for n in names)
+    out = "/outputs/" + "-".join(names)
     cmd = (
-        f"{UV} run --no-sync rl @ {REPO_DIR}/configs/{config}.toml "
-        f"--output-dir /outputs/{config} --clean-output-dir "
-        + " ".join(extra_args or [])
+        f"{UV} run --no-sync rl {files} "
+        f"--output-dir {out} --clean-output-dir " + " ".join(extra_args or [])
     )
     print(f"launching: {cmd}", flush=True)
     try:
@@ -121,7 +128,7 @@ def train(config: str = "rl-debug", extra_args: list[str] | None = None) -> str:
         # behind the rollouts it already paid Pangram for. Committing only on success would
         # discard exactly the traces worth reading after a failure.
         outputs.commit()
-    return f"/outputs/{config}"
+    return out
 
 
 @app.function(image=image, gpu="A100-40GB:2", volumes={"/cache": cache}, secrets=secrets, timeout=3600)
@@ -176,7 +183,7 @@ def fetch(config: str = "rl-debug", limit: int = 5) -> list[dict]:
     # <output_dir>/run_default/, so traces live at
     # <output_dir>/run_default/rollouts/step_N/train/{all,effective}/traces.jsonl.
     # The bare <output_dir>/rollouts/step_N/rank_0.bin is the trainer transport, not records.
-    root = Path(f"/outputs/{config}")
+    root = Path(f"/outputs/{'-'.join(c.strip() for c in config.split(',') if c.strip())}")
     found = sorted(root.rglob("*traces.jsonl"))
     print(f"trace files under {root}: {len(found)}")
     for f in found:

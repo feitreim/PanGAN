@@ -32,7 +32,7 @@
 
 [orchestrator.eval]
 interval = 10
-num_examples = 32
+num_examples = 24  # 3 evals (steps 0, 10, 20) x 24 x $0.05 = $3.60
 group_size = 1
 skip_first_step = false
 

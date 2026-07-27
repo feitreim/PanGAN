@@ -113,8 +113,14 @@ def train(config: str = "rl-debug", extra_args: list[str] | None = None) -> str:
         + " ".join(extra_args or [])
     )
     print(f"launching: {cmd}", flush=True)
-    subprocess.run(cmd, cwd=PRIME_RL_DIR, shell=True, check=True)
-    outputs.commit()
+    try:
+        subprocess.run(cmd, cwd=PRIME_RL_DIR, shell=True, check=True)
+    finally:
+        # Commit even when the run raises. prime-rl appends every finished rollout to
+        # rollouts/step_*/train/all/traces.jsonl as it completes, so a crashed run still leaves
+        # behind the rollouts it already paid Pangram for. Committing only on success would
+        # discard exactly the traces worth reading after a failure.
+        outputs.commit()
     return f"/outputs/{config}"
 
 
@@ -151,3 +157,33 @@ def main(config: str = "rl-debug", check_only: bool = False) -> None:
         print(check.remote())
         return
     print(f"output dir: {train.remote(config=config)}")
+
+
+@app.function(image=image, volumes={"/outputs": outputs}, timeout=900)
+def fetch(config: str = "rl-debug", limit: int = 5) -> list[dict]:
+    """Pull scored rollouts back off the volume — story text, detector verdict, gate reason.
+
+    prime-rl writes these to rollouts/step_*/train/all/traces.jsonl, but that lives on a Modal
+    volume, so `modal run modal_app/train.py::fetch` is how you read them without a GPU.
+    """
+    import json
+    from pathlib import Path
+
+    rows = []
+    for p in sorted(Path(f"/outputs/{config}/rollouts").rglob("train/all/traces.jsonl")):
+        for line in p.open():
+            t = json.loads(line)
+            info, metrics = t.get("info", {}), t.get("metrics", {})
+            rows.append(
+                {
+                    "step": p.parent.parent.parent.name,
+                    "reward": (t.get("rewards") or {}).get("humanness"),
+                    "ai_score": metrics.get("ai_score"),
+                    "coherence": info.get("coherence"),
+                    "gate": info.get("gate"),
+                    "words": info.get("word_count"),
+                    "story": (info.get("story") or "")[:400],
+                }
+            )
+    rows.sort(key=lambda r: (r["ai_score"] is None, r["ai_score"] or 0))
+    return rows[:limit]

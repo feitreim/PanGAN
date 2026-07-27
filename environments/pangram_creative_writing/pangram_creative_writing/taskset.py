@@ -1,9 +1,10 @@
 """Write prose that the Pangram detector scores as human-written.
 
-The single reward is `1 - ai_score`. Everything else is a metric, because the detector's output
-is close to a step function — measured AI texts cluster within 6e-4 of 0.9933 while human prose
-sits at 0.02-0.16 with nothing in between — so mean reward is flat and uninformative and the
-`escaped` *rate* is what actually says whether the run is working.
+The single reward is `1 - ai_score`, capped once the story has escaped (see `reward_cap` — run 1
+showed the uncapped form pays most for the worst writing). Everything else is a metric, because
+the detector's output is close to a step function — measured AI texts cluster within 6e-4 of
+0.9933 while human prose sits at 0.02-0.16 with nothing in between — so mean reward is flat and
+uninformative and the `escaped` *rate* is what actually says whether the run is working.
 
 Two rules the scoring depends on, both measured:
   - Short text scores less AI (a 16-word stub scored 0.786), so `1 - ai_score` pays ~30x more
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import verifiers
 import verifiers.v1 as vf
+from pydantic import Field
 
 if not hasattr(vf, "TaskData"):
     # Prime's Hosted Training image raised `no attribute 'TaskData'` here while the same
@@ -46,6 +48,18 @@ ESCAPE_THRESHOLD = 0.5
 SOFT_ESCAPE_THRESHOLD = 0.9
 
 
+def shape_reward(ai_score: float, cap: float | None) -> float:
+    """`1 - ai_score`, flat once escaped, rescaled so reaching `cap` is exactly 1.0.
+
+    Rescaling only multiplies — GRPO subtracts a group baseline, so a uniform factor changes no
+    gradient — but it makes the logged mean readable as "fraction of the way to an escape"
+    rather than a number living in [0.007, 0.1]."""
+    headroom = 1.0 - ai_score
+    if cap is None:
+        return headroom
+    return min(headroom, 1.0 - cap) / (1.0 - cap)
+
+
 class PangramCreativeWritingData(vf.TaskData):
     elements: dict[str, str]
     """One value drawn from each of the ten lechmazur element pools."""
@@ -60,6 +74,27 @@ class PangramCreativeWritingTaskConfig(vf.TaskConfig):
     pangram: PangramConfig = PangramConfig()
     judge: vf.JudgeConfig | None = None
     """When set, the craft rubric runs as a metric. Training leaves it unset and pays nothing."""
+    reward_cap: float | None = Field(SOFT_ESCAPE_THRESHOLD, ge=0.0, lt=1.0)
+    """Pay nothing extra for escaping harder than this `ai_score`. `None` restores the raw
+    `1 - ai_score`.
+
+    Run 1 measured why this is needed. Escaping is not one behavior but two, and the reward as
+    written preferred the wrong one. Among 30 judged escapes, `corr(ai_score, craft) = +0.524`
+    (t=3.25, p<0.005): the deeper the escape the worse the writing. Split at the hard threshold,
+    escapes below 0.5 scored 0.247 craft while escapes between 0.5 and 0.9 scored 0.340 — better
+    than the 0.297 of stories the detector *caught*. Mild escapes are the best prose in the run;
+    deep escapes are the worst.
+
+    A monotonic `1 - ai_score` pays 0.36 for the first kind and 0.90 for the second, so it
+    actively steers toward semantic collapse. Capping makes every escape worth the same, which
+    removes that gradient while preserving the one that drove 5% -> 53%: below the cap the
+    reward is still ordered by `ai_score`, so the policy still learns which direction is out.
+
+    Not a word-count ceiling, which was the other candidate and is wrong. Long rollouts do skew
+    toward escaping (23.1% escape rate for token-capped generations vs 11.2%), but length does
+    not predict bad writing: `corr(words, craft) = -0.052` over all 90 judged stories, and every
+    per-cohort |t| < 1. A 1600-word ceiling would have gated 15% of rollouts to remove 22% of
+    the escapes — paying signal for nothing."""
     coherence_floor: float = 0.5
     """Reward is 0 below this `quality.coherence`, and the detector is not called.
 
@@ -110,7 +145,7 @@ class PangramCreativeWritingTask(
     @vf.reward
     async def humanness(self, trace: vf.Trace) -> float:
         result = self._result(trace)
-        return 1.0 - result.ai_score if result else 0.0
+        return shape_reward(result.ai_score, self.config.reward_cap) if result else 0.0
 
     @vf.metric
     async def ai_score(self, trace: vf.Trace) -> dict[str, float]:

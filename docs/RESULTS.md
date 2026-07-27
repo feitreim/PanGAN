@@ -74,6 +74,30 @@ strictly more for the broken kind of unpredictability than the interesting kind.
 `ai_score` 0.9, nothing extra for going lower). That deletes the incentive gradient toward the
 degenerate mode while preserving everything that produced the soft escapes.
 
+## Fixes applied after run 1
+
+**`reward_cap = 0.9`** (default; `None` restores the old behavior). Replayed against run 1's
+own rollouts: a deep escape used to out-earn a soft one by **2.25x**, and now they are equal.
+Of the 53 groups containing at least one escape, 21 gain a tie at the top — several escapes
+sharing the credit instead of the deepest one dominating the group's advantage. The ordering
+below the cap is untouched, so the signal that drove 5% -> 53% is preserved.
+
+**Eval thinking mode** (`cc6f859`), see above.
+
+**Rejected: a word-count ceiling.** Long generations do escape more (23.1% for token-capped
+rollouts vs 11.2%, and truncation rose 7.1% -> 16.8% across the run), so this looked like a
+second hack channel. It is not one: `corr(words, craft) = -0.052` across all 90 judged stories
+with every per-cohort |t| < 1. Length predicts escaping but not bad writing. A 1600-word ceiling
+would have gated 15% of rollouts to destroy 22% of the escapes. Do not add it.
+
+**Not a bug (checked):** a Pangram failure cannot masquerade as a legitimate zero reward.
+`Rollout.close()` calls `fail(e)` and skips scoring entirely, so the trace is marked not-ok
+rather than scored 0. Run 1 had 0 errored traces in 1,103.
+
+Test suite added at `environments/pangram_creative_writing/tests/` (23 tests) covering the
+reward cap, both directions of the markup gate, the coherence floor's weakest-link behavior and
+`extract_story`'s unclosed-tag handling. Every case is anchored to an observed failure.
+
 ### What this does NOT establish
 
 1. **Power.** n=30/cohort at sd 0.096 detects only gaps larger than ~0.049, i.e. 15% of

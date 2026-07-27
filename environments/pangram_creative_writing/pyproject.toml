@@ -1,6 +1,6 @@
 [project]
 name = "pangram-creative-writing"
-version = "0.1.3"
+version = "0.2.0"
 description = "Creative writing scored by the Pangram AI-writing detector; reward is 1 - ai_score."
 # The Hub's integration test asserts `tags` exists. `uv run init` (the v1 scaffold) does not
 # emit it, while `prime env init` (the v0 one) does — so a correctly-scaffolded v1 package

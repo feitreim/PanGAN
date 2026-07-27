@@ -1,13 +1,19 @@
 [project]
 name = "pangram-creative-writing"
-version = "0.1.1"
+version = "0.1.2"
 description = "Creative writing scored by the Pangram AI-writing detector; reward is 1 - ai_score."
 # The Hub's integration test asserts `tags` exists. `uv run init` (the v1 scaffold) does not
 # emit it, while `prime env init` (the v0 one) does — so a correctly-scaffolded v1 package
 # fails Hub CI on push until this is added by hand.
 tags = ["creative-writing", "ai-detection", "adversarial", "train", "eval"]
 requires-python = ">=3.11"
-dependencies = ["verifiers", "httpx"]
+# verifiers is pinned, not bare. Prime's Hosted Training image vendors its own
+# verifiers at /app/deps/verifiers, and that copy predates `vf.TaskData` — older
+# than PyPI stable 0.2.1, which has it (so does 0.2.2.dev36; this is staleness,
+# not a rename). A bare `verifiers` was satisfied by that vendored copy, so the
+# taskset failed at import. The floor forces `uv pip install` to pull a version
+# that actually has the v1 API this package is written against.
+dependencies = ["verifiers>=0.2.1", "httpx"]
 
 [build-system]
 requires = ["hatchling"]

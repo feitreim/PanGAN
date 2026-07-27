@@ -5,7 +5,8 @@ commit `83295db`. W&B run `selfhosted-main` / `a0f1a63c`.
 
 ## Headline
 
-The policy learned to evade the detector, and the craft rubric did not detect a cost.
+The policy learned to evade the detector. Craft was flat on average, but that average hides two
+opposing effects: mild escapes write *better* than caught stories, deep escapes write worse.
 
 | | step 1 (base) | step 10 | step 20 | step 21* |
 |---|---|---|---|---|
@@ -41,6 +42,37 @@ rollouts on disk, 30 per cohort, judged by `openai/gpt-5.4-mini` ($1.31 total).
 
 `corr(ai_score, craft) = +0.189` (t=1.80, p~0.08) over all 90 — the reward-hacking direction
 (escaping tracks worse writing), marginal, not significant.
+
+### The average hides two opposing effects
+
+Within the escapes alone the same correlation is strong and significant:
+`corr(ai_score, craft) = +0.524`, t=3.25, n=30, p<0.005. Deeper escape means worse writing.
+
+| | n | craft |
+|---|---|---|
+| deep escapes (`ai < 0.5`) | 10 | 0.247 |
+| detected (`ai >= 0.9`) | 30 | 0.297 |
+| soft escapes (`0.5 <= ai < 0.9`) | 20 | 0.340 |
+
+Soft escapes are the best-written cohort in the sample — better than the stories that were
+caught. Deep escapes are the worst. The flat cohort average was these two cancelling, so
+"no craft cost" is only true in aggregate and should not be quoted on its own.
+
+Reading the text, the two modes are plainly different. A deep escape keeps fluent sentences
+but loses referential structure — nouns arrive unintroduced, participants swap mid-paragraph,
+meaning does not accumulate. It passes every coherence check we have: its trigrams genuinely
+are varied. It is locally novel and globally empty. A soft escape keeps POV, scene and dialogue
+and is odd only at the level of diction ("casting a final, ubiquitous stare"). Meanwhile the
+best-detected control is the most conventionally literary of the three ("a rapturously bleak
+place; the afternoon sun knitted itself between towering obsidian spires") and scored 0.993.
+
+The reading: Pangram keys on predictability of construction rather than quality. Escaping does
+not require writing badly — but `1 - ai_score` is monotonic all the way to 0, so it pays
+strictly more for the broken kind of unpredictability than the interesting kind.
+
+**Implied fix for run 2:** cap the reward at the escape threshold (full credit below
+`ai_score` 0.9, nothing extra for going lower). That deletes the incentive gradient toward the
+degenerate mode while preserving everything that produced the soft escapes.
 
 ### What this does NOT establish
 

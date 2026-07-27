@@ -192,6 +192,62 @@ high-temperature cells, 0 additional rollouts in all three 4B temp-1.0 cells, an
 run 1. This does not contradict run 1's finding that non-ASCII failed to predict escaping —
 that measured presence at temperature 1.0 (54% either way), this measures density.
 
+## Qwen3.5-4B-BASE passes the gate — it is the instruct tuning, not the capability
+
+Both models served by the SAME local vLLM on Modal, same prompts, same sampling, 32 rollouts
+each. This is the controlled comparison; 4B-Instruct's earlier 0/80 came from Prime Inference
+and is reported separately below.
+
+| | 4B-Instruct (same stack) | **4B-Base** |
+|---|---|---|
+| scored / gated | 21 / 11 | 25 / 7 |
+| below 0.9 | 0/21 | **2/25 = 8.0%** |
+| min ai_score | 0.9837 | **0.0640** |
+| score range | 0.0098 | **0.9294** |
+| below 0.993 | 3/21 = 14% | **15/25 = 60%** |
+| verdict | NOT VIABLE | **VIABLE** |
+
+Base lands on 0.8B's baseline almost exactly: 8.0% vs 7.8%.
+
+**On the statistics, carefully.** The escape counts alone are underpowered — 2/25 vs 0/21 is
+Fisher one-sided p = 0.29, and two events is thin. Pooling every instruct rollout (0/101 across
+both stacks and four settings) gives p = 0.038, but that pools across serving stacks.
+
+The distributions are where the evidence actually is, because they use all 46 rollouts rather
+than 2 events. Mann-Whitney on the full score vectors gives **z = -4.22, p = 2.4e-5**, and the
+shift is not confined to the tail: 60% of base rollouts fall below 0.993 against 14% of
+instruct. Base is not "instruct plus two lucky escapes" — the whole distribution has moved.
+
+**The escapes, read honestly: 1.5 of 2 are real.** Both are coherent English (`english` = 1.0,
+trigram variety > 0.99, ungated).
+
+- `ai_score` 0.421 — genuine prose: "The Hum of the new auditory processors grew in their new
+  wings, unsettling. Mother Superior Alistair adjusted the ferrite core module, its
+  chestnut-gold surface humming a faint, resonant thrum."
+- `ai_score` 0.064 — discount this one. It echoes the prompt's element categories as inline
+  labels ("**Object:** neutral density filter... **Method:** via a network of rebellious
+  pranksters"). `scaffold_clean` misses it because SCAFFOLD deliberately excludes the six
+  categories that are ordinary English — matching them gated 56/59 rollouts in run 1. This is a
+  prompt-echo artifact, not writing.
+
+Base is also better behaved on the task: mean 584 words against instruct's 775, i.e. actually
+near the 400-700 the prompt asks for.
+
+### Why this matters
+
+The escape variance at 0.8B was assumed to be incompetence. It is not — or not only. A 4B model
+with the instruct tuning removed recovers the same variance while writing far better prose. What
+Pangram reads is the post-training register, not the model's capability.
+
+That reopens the scaled-up run 4B-Instruct had closed off, and it changes what run 2 should be:
+train `Qwen3.5-4B-Base`, where "escape while writing well" is at least reachable. It also makes
+the run-1 craft floor effect addressable for the first time.
+
+**Caveat carried forward:** n=25, so the 8% point estimate has a 95% interval of roughly 1-26%.
+Before committing a full training budget, the escape rate should be re-measured at n>=64, and
+`scaffold_clean` should be extended to catch the "Object:"/"Method:" label-echo pattern, which
+a base model does more than an instruct model and which the reward would otherwise pay for.
+
 ## Bug fixed: calibrate.sh had no thinking switch
 
 `Qwen3.5-4B` put 12,077 characters of "Thinking Process:" into `reasoning_content`, left

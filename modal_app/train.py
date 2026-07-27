@@ -35,6 +35,11 @@ image = (
         "curl -LsSf https://astral.sh/uv/install.sh | sh",
         f"git clone https://github.com/PrimeIntellect-ai/prime-rl.git {PRIME_RL_DIR}",
         f"cd {PRIME_RL_DIR} && git checkout {PRIME_RL_COMMIT}",
+        # prime-rl's .gitmodules points at git@github.com: for verifiers and renderers, which
+        # needs an SSH key and a known_hosts entry the build container has neither of ("Host key
+        # verification failed"). pydantic-config uses HTTPS and clones fine, so the failure is
+        # per-submodule rather than obvious. All three are public, so rewrite SSH to HTTPS.
+        f"cd {PRIME_RL_DIR} && git config url.'https://github.com/'.insteadOf 'git@github.com:'",
         # Only the submodules prime-rl's README lists for an RL run. research-environments is a
         # large checkout we never load, so it is deliberately omitted.
         f"cd {PRIME_RL_DIR} && git submodule update --init --depth 1 "

@@ -55,9 +55,15 @@ COST=$(python3 -c "print(f'{$TOTAL * 0.05:.2f}')")
 # "default" harness in verifiers - import_harness("default") raises
 # ModuleNotFoundError - despite what `prime train init` and the skill docs say.
 #
-# max-output-tokens 3072: at ~1600 the model truncated ~97% of rollouts
-# mid-sentence (it overshoots the 400-700 word target to a median of ~1,171
+# sampling.max-tokens 3072: at ~1600 the model truncated ~97% of rollouts
+# mid-sentence (it overshoots the 400-700 word target to a median of ~1,250
 # words). Truncated stories still get scored, which would corrupt the gate.
+#
+# It must be --sampling.max-tokens, NOT --max-output-tokens. The latter is the
+# framework's per-rollout budget, enforced only *between turns*; a single-turn
+# null harness never reaches a second turn, so it never fires. Setting it and
+# assuming generation was capped produced a 52,802-word rollout in the clean
+# calibration run. Only max_scored_words kept that from billing 53 units.
 EVAL_ARGS=(
   --taskset.id pangram-creative-writing
   --taskset.split train
@@ -68,7 +74,7 @@ EVAL_ARGS=(
   --shuffle
   --no-push
   -c 8
-  --max-output-tokens 3072
+  --sampling.max-tokens 3072
   -o "$OUT"
 )
 

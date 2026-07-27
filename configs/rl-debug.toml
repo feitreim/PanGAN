@@ -68,3 +68,10 @@ gpu_memory_utilization = 0.5
 
 [inference.model]
 max_model_len = 4096
+
+# A smoke run is shorter than the default 10-step extras interval, so without this the samples
+# table never fires at all. Log every rollout, every step -- the run is tiny and seeing the
+# actual prose is the whole point of a smoke test.
+[orchestrator.wandb.log_extras]
+sample_ratio = 1.0
+interval = 1

@@ -144,7 +144,7 @@ class PangramCreativeWritingTask(
 
     @vf.metric
     async def coherence(self, trace: vf.Trace) -> dict[str, float]:
-        keys = ("coherence", "capitalization", "scaffold_clean", "trigram_variety")
+        keys = ("coherence", "capitalization", "scaffold_clean", "trigram_variety", "markup_free")
         return {key: float(trace.info[key]) for key in keys if key in trace.info}
 
     @vf.metric

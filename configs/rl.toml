@@ -198,3 +198,13 @@ max_model_len = 4096
 # PANGRAM_API_KEY is read by the env server, which the ORCHESTRATOR spawns as a
 # child process - the launcher passes os.environ through, so exporting it in the
 # launching shell is enough. It must never appear in this file.
+
+# Rollout sample logging to W&B. Defaults are sample_ratio = None (every rollout) and
+# interval = 10 steps; at 128 rollouts/step of 800+ word stories that table gets unusable
+# fast, so log a tenth of them. Verified against the real RLConfig: setting
+# [orchestrator.wandb.log_extras] alongside the shared [wandb] block validates, because the
+# shared block already populates both trainer and orchestrator (specifying only
+# [orchestrator.wandb] without [trainer.wandb] is what validate_shared_wandb_config rejects).
+[orchestrator.wandb.log_extras]
+sample_ratio = 0.1
+interval = 5

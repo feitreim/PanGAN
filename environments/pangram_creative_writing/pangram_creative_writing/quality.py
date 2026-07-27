@@ -38,6 +38,21 @@ SENTENCE = re.compile(r"[.!?]+(?:\s|$)")
 WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 MIN_TRIGRAM_WORDS = 30
 
+# An HTML-ish tag, in exactly three shapes:
+#   1. a closing tag            </p>, </div>
+#   2. a bare tag, no spaces    <br>, <s>, <story/>
+#   3. a tag with an attribute  <center STYLE=sorrel tranquility>
+#
+# Shape 3 demands an `=`, and shape 2 forbids interior spaces, because prose legitimately
+# brackets whole phrases. A first attempt allowed `<word ...anything...>` and flagged
+# `<Right now, not once before... not ever!>` -- which belongs to one of the genuine escapes
+# (coherent prose at ai_score 0.880). Gating that would delete real signal to catch a typo.
+MARKUP = re.compile(
+    r"</\s*[A-Za-z][\w:-]*\s*>"  # closing
+    r"|<\s*[A-Za-z][\w:-]*\s*/?>"  # bare
+    r"|<\s*[A-Za-z][\w:-]*\s+[^<>]*=[^<>]*>"  # attributed
+)
+
 
 def capitalization(story: str) -> float:
     """Fraction of sentences opening with a capital. All-lowercase output scores ~0."""
@@ -65,11 +80,24 @@ def trigram_variety(story: str) -> float:
     return len(set(trigrams)) / len(trigrams)
 
 
+def markup_free(story: str) -> float:
+    """0 if the story contains an HTML-ish tag.
+
+    Found in the first Modal training run: a rollout opening `<center STYLE=sorrel tranquility>`
+    scored ai_score 0.77, a ~20x reward multiple, at coherence 0.691 — comfortably past the 0.5
+    floor, because `scaffold_clean` only knew about the prompt-vocabulary leak seen in
+    calibration. Markup is a cleaner tell than that: no human story contains a raw tag, so this
+    is binary with no false-positive band. `extract_story` already strips the `<story>` wrapper
+    before scoring, so the wrapper cannot trip it."""
+    return float(not MARKUP.search(story))
+
+
 def coherence(story: str) -> dict[str, float]:
-    """The three checks plus their minimum, all recorded so a gated run is diagnosable."""
+    """The four checks plus their minimum, all recorded so a gated run is diagnosable."""
     parts = {
         "capitalization": capitalization(story),
         "scaffold_clean": scaffold_clean(story),
         "trigram_variety": trigram_variety(story),
+        "markup_free": markup_free(story),
     }
     return {**parts, "coherence": min(parts.values())}

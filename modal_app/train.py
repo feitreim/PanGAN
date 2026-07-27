@@ -37,13 +37,24 @@ image = (
         f"cd {PRIME_RL_DIR} && git checkout {PRIME_RL_COMMIT}",
         # prime-rl's .gitmodules points at git@github.com: for verifiers and renderers, which
         # needs an SSH key and a known_hosts entry the build container has neither of ("Host key
-        # verification failed"). pydantic-config uses HTTPS and clones fine, so the failure is
-        # per-submodule rather than obvious. All three are public, so rewrite SSH to HTTPS.
-        f"cd {PRIME_RL_DIR} && git config url.'https://github.com/'.insteadOf 'git@github.com:'",
+        # verification failed"). pydantic-config uses an HTTPS URL and clones fine, so only two
+        # of the three fail and the cause is easy to misread.
+        #
+        # Rewrite .gitmodules and `submodule sync` rather than `git config insteadOf`: the
+        # insteadOf rewrite did NOT apply to the submodule clones here (they still resolved the
+        # SSH URL and failed identically), so fix the URLs at the source where nothing can
+        # scope around them. All three repos are public.
+        f"cd {PRIME_RL_DIR} && sed -i 's|git@github.com:|https://github.com/|g' .gitmodules",
+        f"cd {PRIME_RL_DIR} && git submodule sync -- deps/verifiers deps/renderers deps/pydantic-config",
         # Only the submodules prime-rl's README lists for an RL run. research-environments is a
         # large checkout we never load, so it is deliberately omitted.
-        f"cd {PRIME_RL_DIR} && git submodule update --init --depth 1 "
+        # No --depth 1: submodules are pinned to exact SHAs that need not be a branch tip, and a
+        # shallow fetch of a non-tip commit fails with "reference is not a tree".
+        f"cd {PRIME_RL_DIR} && git submodule update --init "
         "-- deps/verifiers deps/renderers deps/pydantic-config",
+        # The whole point of this image: verifiers must be new enough to have vf.TaskData, which
+        # is exactly what Prime's hosted image lacked. Fail the build here, not mid-run.
+        f"cd {PRIME_RL_DIR} && grep -q 'TaskData' deps/verifiers/verifiers/v1/__init__.py",
         f"cd {PRIME_RL_DIR} && {UV} sync --all-extras",
         gpu="A10G",  # some extras probe for a device at build time
     )

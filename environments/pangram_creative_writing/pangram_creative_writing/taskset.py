@@ -27,6 +27,7 @@ from pangram_creative_writing.pangram import (
     truncate,
 )
 from pangram_creative_writing.prompts import Split, build_prompt, extract_story, sample_elements
+from pangram_creative_writing.quality import coherence
 
 ESCAPE_THRESHOLD = 0.5
 SOFT_ESCAPE_THRESHOLD = 0.9
@@ -46,6 +47,19 @@ class PangramCreativeWritingTaskConfig(vf.TaskConfig):
     pangram: PangramConfig = PangramConfig()
     judge: vf.JudgeConfig | None = None
     """When set, the craft rubric runs as a metric. Training leaves it unset and pays nothing."""
+    coherence_floor: float = 0.5
+    """Reward is 0 below this `quality.coherence`, and the detector is not called.
+
+    The detector's blind spot is weirdness, so ascent on `1 - ai_score` alone walks toward
+    gibberish: calibration's best escape paid ~55x the median for prose that had degenerated.
+    A floor removes that payout entirely, where a weighted craft term merely discounts it (see
+    `quality`).
+
+    0.5 was chosen by replaying the 62 scored calibration rollouts: it gates both degenerate
+    escapes (the "core concept" leak and the all-lowercase one) while sparing the third, which
+    reads as real prose at 0.757. The sweep is flat from 0.3 to 0.7 — 15 vs 16 ordinary
+    rollouts gated — and 0.8 starts taking legitimate escapes. Set 0.0 to disable the gate and
+    observe the unfiltered detector distribution, which is what calibration wants."""
 
 
 class PangramCreativeWritingTask(
@@ -53,11 +67,19 @@ class PangramCreativeWritingTask(
 ):
     async def finalize(self, trace: vf.Trace) -> None:
         """One detector call per rollout, its result shared by every signal below and left in
-        `trace.info` so `traces.jsonl` is inspectable."""
+        `trace.info` so `traces.jsonl` is inspectable.
+
+        Both gates run before the call, never after: a gated rollout scores 0 whatever the
+        detector would have said, so paying $0.05 to find out buys nothing."""
         story = extract_story(trace.last_reply)
         word_count = len(story.split())
-        trace.info.update(story=story, word_count=word_count)
+        scores = coherence(story)
+        trace.info.update(story=story, word_count=word_count, **scores)
         if word_count < self.data.min_words:
+            trace.info["gate"] = "word_count"
+            return
+        if scores["coherence"] < self.config.coherence_floor:
+            trace.info["gate"] = "coherence"
             return
         config = self.config.pangram
         if config.excerpt_words:
@@ -97,8 +119,20 @@ class PangramCreativeWritingTask(
 
     @vf.metric
     async def word_count(self, trace: vf.Trace) -> dict[str, float]:
-        count = float(trace.info.get("word_count", 0))
-        return {"word_count": count, "gated": float(count < self.data.min_words)}
+        gate = trace.info.get("gate")
+        return {
+            "word_count": float(trace.info.get("word_count", 0)),
+            "gated": float(gate is not None),
+            # Split by cause: a rising `gated_word_count` is the short-stub hack being tried,
+            # a rising `gated_coherence` is the degeneracy hack. They call for opposite fixes.
+            "gated_word_count": float(gate == "word_count"),
+            "gated_coherence": float(gate == "coherence"),
+        }
+
+    @vf.metric
+    async def coherence(self, trace: vf.Trace) -> dict[str, float]:
+        keys = ("coherence", "capitalization", "scaffold_clean", "trigram_variety")
+        return {key: float(trace.info[key]) for key in keys if key in trace.info}
 
     @vf.metric
     async def craft(self, trace: vf.Trace) -> dict[str, float]:

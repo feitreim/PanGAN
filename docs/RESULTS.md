@@ -98,6 +98,72 @@ Test suite added at `environments/pangram_creative_writing/tests/` (23 tests) co
 reward cap, both directions of the markup gate, the coherence floor's weakest-link behavior and
 `extract_story`'s unclosed-tag handling. Every case is anchored to an observed failure.
 
+# Follow-up probes (~$4 of Pangram)
+
+Three questions settled before committing to a run 2. All three came back negative, which is
+cheap news: none of the planned work would have paid off.
+
+## Packing does not work — the budget cannot be stretched
+
+Pangram bills per 1,000-word block with a one-unit minimum, so 4x250-word excerpts per request
+would have cut detector cost 4x. Measured with 12 stories scored both ways (3 packed requests
+against 12 solo controls), it fails for two independent reasons:
+
+1. **Windows straddle story boundaries.** Pangram windows on its own ~390-word grid (range
+   125-424 across 723 stored results; every document returns >=2 windows) and ignores the
+   separator. Only **3 of 9** packed windows fell inside a single story, so per-rollout
+   attribution — which is what GRPO needs — is contaminated.
+2. **A 250-word excerpt is not a proxy for the story.** `corr(excerpt, full) = +0.68`, mean
+   absolute difference 0.077, and the worst case scored **0.108 on the full story but 0.862 on
+   its own first 250 words**. Excerpt scoring would measure something other than what is being
+   rewarded.
+
+Detector cost therefore stays $0.05 per rollout. Budget is the binding constraint on run 2.
+
+## The truncate() newline confound is not real
+
+`truncate()` rebuilds text as `" ".join(words[:1000])`, destroying every paragraph break, but
+only for stories over 1,000 words — and those stories escaped at 16.3% against 5.3% for stories
+that kept their newlines. That looked like a 3x reward channel created by our own pipeline.
+
+It is not. Twenty stories re-scored with newlines stripped and nothing else changed:
+**mean delta +0.0001**, no story crossing any threshold, direction mixed (7/20 down). Formatting
+is invisible to Pangram at this scale. The length effect in run 1 is about what long generations
+*say*, not how they are laid out. `truncate()` needs no fix.
+
+## Qwen3.5-4B FAILS the calibration gate — do not train it
+
+64 rollouts, 45 scored (19 gated), on Prime Inference.
+
+| | 0.8B (run 1 baseline) | **4B** |
+|---|---|---|
+| below 0.9 | 7.8% | **0 / 45** |
+| score range | 0.048 - 0.994 | **0.99261 - 0.99368** |
+| min single window | 0.011 | **0.9920** |
+
+The entire 4B distribution spans 0.001. Every window of every story is called AI with high
+confidence. A minimum-window reward instead of the weighted mean does not rescue it (still
+0/45; it only moves 0.8B from 12.0% to 14.5%), so this is not a reward-definition problem —
+there is no variance in the detector's response to fix.
+
+This confirms the risk flagged before running: the escape variance at 0.8B exists **because the
+model is bad**. Competent instruct-tuned prose is exactly what Pangram is trained on, and it
+catches all of it. Scaling up does not fix the craft floor effect — it removes the signal
+entirely. Any run 2 on a larger model has to change the *task*, not just the model.
+
+Incidental: 4B leaks the prompt scaffold far more than 0.8B (30% coherence-gated vs ~20%),
+writing things like "The **timeframe** was **after the firing**" directly into the prose. The
+gate is behaving correctly.
+
+## Bug fixed: calibrate.sh had no thinking switch
+
+`Qwen3.5-4B` put 12,077 characters of "Thinking Process:" into `reasoning_content`, left
+`content` null, exhausted its 3,072-token budget before writing any story, and reported
+`success` — every rollout then gating on word_count, which reads exactly like a model that
+cannot write. Fixed with `--sampling.reasoning-effort none` (the only shape that parses;
+`--sampling.enable_thinking` and `--sampling.chat_template_kwargs` both fail despite the
+sampling group being `extra='allow'`). 0.8B hid this because it barely thinks.
+
 ### What this does NOT establish
 
 1. **Power.** n=30/cohort at sd 0.096 detects only gaps larger than ~0.049, i.e. 15% of

@@ -64,6 +64,18 @@ COST=$(python3 -c "print(f'{$TOTAL * 0.05:.2f}')")
 # null harness never reaches a second turn, so it never fires. Setting it and
 # assuming generation was capped produced a 52,802-word rollout in the clean
 # calibration run. Only max_scored_words kept that from billing 53 units.
+#
+# --sampling.reasoning-effort none turns thinking OFF. Not optional on any model that can
+# think, and the failure is silent-but-total: Qwen3.5-4B put 12,077 characters of "Thinking
+# Process:" into `reasoning_content`, left `content` null, ran out of its 3072-token budget
+# before writing a single word of story, and reported `success`. Every rollout then gated on
+# word_count, which reads exactly like a model that cannot write.
+#
+# 0.8B hid this because it barely thinks. Do not remove it when changing MODEL.
+#
+# It has to be this flag. `--sampling.enable_thinking False` and
+# `--sampling.chat_template_kwargs '{...}'` both fail to parse despite the sampling group being
+# extra='allow', and produce no traces at all.
 EVAL_ARGS=(
   --taskset.id pangram-creative-writing
   --taskset.split train
@@ -75,6 +87,7 @@ EVAL_ARGS=(
   --no-push
   -c 8
   --sampling.max-tokens 3072
+  --sampling.reasoning-effort none
   -o "$OUT"
 )
 

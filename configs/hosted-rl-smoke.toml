@@ -39,15 +39,33 @@ temperature = 1.0
 enable_thinking = false
 
 [wandb]
+entity = "eitreif"
 project = "pan-gan"
 name = "hosted-smoke"
 
+# Sub-tables, not one deep inline table. The prime CLI parses config with the
+# legacy `toml` package (TOML 0.5 era), which rejects a 3-level inline table whose
+# inner table holds two nested tables:
+#   a = { s = "e", t = { p = { m = 1 }, j = { n = 2 } } }   -> Invalid inline table value
+# Python's own tomllib accepts that happily, so `tomllib.load()` is NOT a valid
+# check for a config this CLI has to read. Verify with prime's interpreter:
+#   /Users/finn/.local/share/uv/tools/prime/bin/python -c "import toml;toml.load('<file>')"
 [[env]]
 name = "pangram-cw-train"
-taskset = { id = "pangram-creative-writing", split = "train", num_tasks = 32, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, timeout = 300.0, max_scored_words = 1000 } } }
 harness = { id = "null", runtime = { type = "subprocess" } }
 pool = { type = "static", num_workers = 1 }
 timeout = { rollout = 600, finalize = 600, scoring = 600 }
+
+[env.taskset]
+id = "feitreim/pangram-creative-writing"
+split = "train"
+num_tasks = 32
+seed = 0
+min_words = 400
+max_words = 700
+
+[env.taskset.task]
+pangram = { max_concurrent = 4, timeout = 300.0, max_scored_words = 1000 }
 
 # interval = 5 with max_steps = 1 means exactly one eval, at step 0, on the base
 # model. That is both the plumbing check for the judge and the baseline number.
@@ -64,10 +82,24 @@ enable_thinking = false
 
 [[eval.env]]
 name = "pangram-cw-eval"
-taskset = { id = "pangram-creative-writing", split = "eval", num_tasks = 16, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, max_scored_words = 1000 }, judge = { model = "openai/gpt-5.4-mini" } } }
 harness = { id = "null", runtime = { type = "subprocess" } }
 pool = { type = "static", num_workers = 1 }
 timeout = { rollout = 600, finalize = 600, scoring = 600 }
+
+[eval.env.taskset]
+id = "feitreim/pangram-creative-writing"
+split = "eval"
+num_tasks = 16
+seed = 0
+min_words = 400
+max_words = 700
+
+# Setting `judge` is what turns the craft rubric on. It is a metric, never a
+# reward, so it measures whether prose quality collapses while the escape rate
+# climbs — the reward-hacking check — without touching the training signal.
+[eval.env.taskset.task]
+pangram = { max_concurrent = 4, max_scored_words = 1000 }
+judge = { model = "openai/gpt-5.4-mini" }
 
 [[post_batch_filters]]
 type = "gibberish"

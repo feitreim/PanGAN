@@ -73,6 +73,7 @@ temperature = 1.0      # in-group diversity is the only thing GRPO can learn fro
 enable_thinking = false  # we want prose, not a reasoning block eating the budget
 
 [wandb]
+entity = "eitreif"
 project = "pan-gan"
 name = "hosted-main"
 
@@ -86,7 +87,7 @@ name = "hosted-main"
 # The craft rubric is an eval-only instrument (see [[eval.env]]).
 [[env]]
 name = "pangram-cw-train"
-taskset = { id = "pangram-creative-writing", split = "train", num_tasks = 200, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, timeout = 300.0, max_scored_words = 1000 } } }
+taskset = { id = "feitreim/pangram-creative-writing", split = "train", num_tasks = 200, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, timeout = 300.0, max_scored_words = 1000 } } }
 
 # "null" is the tool-less chat loop, which is what a single-turn prose task wants.
 # NOTE: `prime train init`'s template comment and the train-with-environments skill
@@ -144,7 +145,7 @@ enable_thinking = false
 # PRIME_API_KEY, so that key must reach the container too.
 [[eval.env]]
 name = "pangram-cw-eval"
-taskset = { id = "pangram-creative-writing", split = "eval", num_tasks = 64, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, max_scored_words = 1000 }, judge = { model = "openai/gpt-5.4-mini" } } }
+taskset = { id = "feitreim/pangram-creative-writing", split = "eval", num_tasks = 64, seed = 0, min_words = 400, max_words = 700, task = { pangram = { max_concurrent = 4, max_scored_words = 1000 }, judge = { model = "openai/gpt-5.4-mini" } } }
 harness = { id = "null", runtime = { type = "subprocess" } }
 pool = { type = "static", num_workers = 1 }
 timeout = { rollout = 600, finalize = 600, scoring = 600 }

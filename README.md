@@ -32,7 +32,7 @@ This one has the worst rated quality, but has a very low Pangram score. It
 really suprises me that these grammar/logic errors are tripping up Pangram as
 much as they are.
 ---
-DEEP ESCAPE - worst quality in the sample
+good evasion - worst quality in the sample
 pangram=0.1079  quality=0.075  step=21  words=651
 ---
 The wind howled through the velvet halls of the chest, a wet belting sound
@@ -52,7 +52,7 @@ distant thunder. "Reasoning is wrong," the man declared.
 [...]
 ---
 
-SOFT ESCAPE - best quality in the sample
+light evasion - best quality in the sample
 pangram=0.6415  quality=0.524  step=21  words=1067
 ---
 I leaned against the brass ring, watching the emergency halt lights above
